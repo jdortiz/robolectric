@@ -15,6 +15,7 @@ import android.Manifest.permission;
 import android.app.Application;
 import android.content.Context;
 import android.content.pm.PackageInfo;
+import android.content.pm.UserInfo;
 import android.os.Bundle;
 import android.os.Parcel;
 import android.os.Process;
@@ -33,6 +34,10 @@ public class ShadowUserManagerTest {
 
   private UserManager userManager;
   private Context context;
+
+  private static final int TEST_USER_HANDLE = 0;
+  private static final int TEST_USER_HANDLE_2 = 1;
+  private static UserInfo PROFILE_USER_INFO = new UserInfo();
 
   @Before
   public void setUp() {
@@ -333,6 +338,28 @@ public class ShadowUserManagerTest {
     } catch (UnsupportedOperationException e) {
       assertThat(e).hasMessageThat().isEqualTo("Must add user before switching to it");
     }
+  }
+
+  @Test
+  @Config(minSdk = LOLLIPOP)
+  public void getProfiles_isEmpty() {
+    assertThat(userManager.getProfiles(TEST_USER_HANDLE)).isEmpty();
+  }
+
+  @Test
+  @Config(minSdk = LOLLIPOP)
+  public void getProfiles_addedProfile_containsProfile() {
+    shadowOf(userManager).addProfile(TEST_USER_HANDLE, PROFILE_USER_INFO);
+
+    assertThat(userManager.getProfiles(TEST_USER_HANDLE)).contains(PROFILE_USER_INFO);
+  }
+
+  @Test
+  @Config(minSdk = LOLLIPOP)
+  public void getProfiles_addedProfileDifferentUser_isEmpty() {
+    shadowOf(userManager).addProfile(TEST_USER_HANDLE_2, PROFILE_USER_INFO);
+
+    assertThat(userManager.getProfiles(TEST_USER_HANDLE)).contains(PROFILE_USER_INFO);
   }
 
   // Create user handle from parcel since UserHandle.of() was only added in later APIs.
