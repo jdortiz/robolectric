@@ -16,7 +16,6 @@ import android.os.ParcelFileDescriptor;
 import android.os.Parcelable;
 import android.text.TextUtils;
 import android.util.Log;
-import android.util.Pair;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.FileDescriptor;
@@ -24,13 +23,15 @@ import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.io.RandomAccessFile;
+import java.io.Serializable;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.SortedMap;
+import java.util.TreeMap;
 import org.robolectric.annotation.HiddenApi;
 import org.robolectric.annotation.Implementation;
 import org.robolectric.annotation.Implements;
@@ -509,16 +510,39 @@ public class ShadowParcel {
 
   private static class ByteBuffer {
 
+    private static class Entry implements Serializable {
+      final int sizeBytes;
+      final Object value;
+
+      Entry(int sizeBytes, Object value) {
+        this.sizeBytes = sizeBytes;
+        this.value = value;
+      }
+    }
+
     // List of elements where a pair is a piece of data and the sizeof that data
-    private List<Pair<Integer, ?>> buffer = new ArrayList<>();
-    private int index;
+    private TreeMap<Integer, Entry> data = new TreeMap<Integer, Entry>();
+    private int dataPosition = 0;
+    private int dataSize = 0;
+    private int dataCapacity = 0;
 
     /**
      * Removes all elements from the byte buffer
      */
     public void clear() {
-      index = 0;
-      buffer.clear();
+      data.clear();
+      dataPosition = 0;
+      dataSize = 0;
+      dataCapacity = 0;
+    }
+
+    private SortedMap<Integer, Entry> dataBetween(int startIndex, int endIndex) {
+      return data.subMap(startIndex, /* fromInclusive= */ true, endIndex, /* toInclusive= */ false);
+    }
+
+    /** Removes data in a particular range to simulate being overwritten. */
+    private void clearBetween(int startIndex, int endIndex) {
+      dataBetween(startIndex, endIndex).clear();
     }
 
     /**
@@ -572,7 +596,7 @@ public class ShadowParcel {
      * Reads a byte from the byte buffer based on the current data position
      */
     public byte readByte() {
-      return readValue((byte) 0);
+      return readValue((byte) 0, Byte.class);
     }
 
     /**
@@ -586,7 +610,7 @@ public class ShadowParcel {
      * Reads a int from the byte buffer based on the current data position
      */
     public int readInt() {
-      return readValue(0);
+      return readValue(0, Integer.class);
     }
 
     /**
@@ -600,7 +624,7 @@ public class ShadowParcel {
      * Reads a long from the byte buffer based on the current data position
      */
     public long readLong() {
-      return readValue(0L);
+      return readValue(0L, Long.class);
     }
 
     /**
@@ -614,7 +638,7 @@ public class ShadowParcel {
      * Reads a float from the byte buffer based on the current data position
      */
     public float readFloat() {
-      return readValue(0f);
+      return readValue(0f, Float.class);
     }
 
     /**
@@ -628,13 +652,14 @@ public class ShadowParcel {
      * Reads a double from the byte buffer based on the current data position
      */
     public double readDouble() {
-      return readValue(0d);
+      return readValue(0d, Double.class);
     }
 
     /**
      * Writes a String to the byte buffer at the current data position
      */
     public void writeString(String s) {
+      // TODO: Real Parcel uses 16-bit characters -- should be s.length() * 2.
       int length = TextUtils.isEmpty(s) ? Integer.SIZE / 8 : s.length();
       writeValue(length, s);
     }
@@ -643,7 +668,7 @@ public class ShadowParcel {
      * Reads a String from the byte buffer based on the current data position
      */
     public String readString() {
-      return readValue(null);
+      return readValue(null, String.class);
     }
 
     /**
@@ -660,7 +685,7 @@ public class ShadowParcel {
      * Reads an IBinder from the byte buffer based on the current data position
      */
     public IBinder readStrongBinder() {
-      return readValue(null);
+      return readValue(null, IBinder.class);
     }
 
     /**
@@ -672,12 +697,8 @@ public class ShadowParcel {
      * @param length number of bytes to copy
      */
     public void appendFrom(ByteBuffer other, int offset, int length) {
-      int otherIndex = other.toIndex(offset);
-      int otherEndIndex = other.toIndex(offset + length);
-      for (int i = otherIndex; i < otherEndIndex && i < other.buffer.size(); i++) {
-        int elementSize = other.buffer.get(i).first;
-        Object elementValue = other.buffer.get(i).second;
-        writeValue(elementSize, elementValue);
+      for (Entry entry : other.dataBetween(offset, offset + length).values()) {
+        writeValue(entry.sizeBytes, entry.value);
       }
     }
 
@@ -688,6 +709,7 @@ public class ShadowParcel {
      * @param offset starting position in bytes to start reading array at
      * @param length number of bytes to read from array
      */
+    @SuppressWarnings("unchecked") // Unavoidable due to serialization.
     public static ByteBuffer fromByteArray(byte[] array, int offset, int length) {
       ByteBuffer byteBuffer = new ByteBuffer();
 
@@ -695,12 +717,11 @@ public class ShadowParcel {
         ByteArrayInputStream bis = new ByteArrayInputStream(array, offset,
             length);
         ObjectInputStream ois = new ObjectInputStream(bis);
-        int numElements = ois.readInt();
-        for (int i = 0; i < numElements; i++) {
-          int sizeOf = ois.readInt();
-          Object value = ois.readObject();
-          byteBuffer.buffer.add(Pair.create(sizeOf, value));
-        }
+        byteBuffer.dataSize = ois.readInt();
+        byteBuffer.dataCapacity = byteBuffer.dataSize;
+        byteBuffer.dataPosition = 0;
+        byteBuffer.data.clear();
+        byteBuffer.data.putAll((Map<Integer, Entry>) ois.readObject());
         return byteBuffer;
       } catch (Exception e) {
         throw new RuntimeException(e);
@@ -715,12 +736,8 @@ public class ShadowParcel {
       try {
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
         ObjectOutputStream oos = new ObjectOutputStream(bos);
-        int length = buffer.size();
-        oos.writeInt(length);
-        for (Pair<Integer, ?> element : buffer) {
-          oos.writeInt(element.first);
-          oos.writeObject(element.second);
-        }
+        oos.writeInt(dataSize);
+        oos.writeObject(data);
         return bos.toByteArray();
       } catch (IOException e) {
         throw new RuntimeException(e);
@@ -738,23 +755,21 @@ public class ShadowParcel {
      * Total buffer size in bytes of byte buffer included unused space.
      */
     public int dataCapacity() {
-      return dataSize();
+      return dataCapacity;
     }
 
     /**
      * Current data position of byte buffer in bytes. Reads / writes are from this position.
      */
     public int dataPosition() {
-      return toDataPosition(index);
+      return dataPosition;
     }
 
     /**
      * Current amount of bytes currently written for ByteBuffer.
      */
     public int dataSize() {
-      int totalSize = totalSize();
-      int dataPosition = dataPosition();
-      return totalSize > dataPosition ? totalSize : dataPosition;
+      return dataSize;
     }
 
     /**
@@ -764,54 +779,79 @@ public class ShadowParcel {
      *          Desired position in bytes
      */
     public void setDataPosition(int pos) {
-      index = toIndex(pos);
+      dataPosition = pos;
     }
 
     public void setDataSize(int size) {
-      // TODO
+      ensureNotInMiddleOfObject(size); // We don't support truncating in between an object.
+      if (size < dataSize) {
+        clearBetween(size, dataSize);
+      }
+      dataPosition = Math.min(dataPosition, size);
+      dataSize = size;
+      dataCapacity = Math.max(dataCapacity, size);
     }
 
     public void setDataCapacity(int size) {
-      // TODO
+      setDataSize(Math.min(dataSize, size));
+      dataCapacity = size;
     }
 
-    private int totalSize() {
-      int size = 0;
-      for (Pair<Integer, ?> element : buffer) {
-        size += element.first;
+    /** Rounds to next 4-byte bounder similar to native Parcel. */
+    private int pad(int unpaddedSizeBytes) {
+      return ((unpaddedSizeBytes + 3) / 4) * 4;
+    }
+
+    /** Make sure the data position isn't halfway inside some other object. */
+    private void ensureNotInMiddleOfObject(int position) {
+      SortedMap<Integer, Entry> entriesBefore = data.headMap(position, /* toInclusive= */ false);
+      if (!entriesBefore.isEmpty()) {
+        int previousStart = entriesBefore.lastKey();
+        Entry entry = data.get(previousStart);
+        int previousEnd = previousStart + entry.sizeBytes;
+        if (previousEnd > position) {
+          throw new IllegalArgumentException(
+              String.format(
+                  Locale.US,
+                  "Cannot partially overwrite objects: "
+                      + "%d in middle of \"%s\" (%s) spanning [%d,%d)",
+                  position,
+                  entry.value,
+                  entry.value == null ? "null" : entry.value.getClass().getName(),
+                  previousStart,
+                  previousEnd));
+        }
       }
-      return size;
     }
 
-    private <T> T readValue(T defaultValue) {
-      return (index < buffer.size()) ? (T) buffer.get(index++).second : defaultValue;
-    }
-
-    private void writeValue(int i, Object o) {
-      Pair<Integer, ?> value = Pair.create(i, o);
-      if (index < buffer.size()) {
-        buffer.set(index, value);
-      } else {
-        buffer.add(value);
+    private <T> T readValue(T defaultValue, Class<T> clazz) {
+      Entry entry = data.get(dataPosition);
+      if (entry == null) {
+        ensureNotInMiddleOfObject(dataPosition);
+        // We're reading from a gap.  Everything except Long only consumes 4 bytes when reading the
+        // default value.
+        dataPosition = Math.min(dataSize, clazz == Long.class ? 8 : 4);
+        return defaultValue;
       }
-      index++;
+
+      // Increase by whatever length the item was, since non-default items are variable-length.
+      dataPosition += entry.sizeBytes;
+      // Do a safe, eager cast.
+      return clazz.cast(entry.value);
     }
 
-    private int toDataPosition(int index) {
-      int pos = 0;
-      for (int i = 0; i < index; i++) {
-        pos += buffer.get(i).first;
+    private void writeValue(int unpaddedSizeBytes, Object o) {
+      // Mimic Android behavior: Android eagerly aligns each entry in a parcel to the next 4-byte
+      // boundary.
+      ensureNotInMiddleOfObject(dataPosition);
+      Entry entry = new Entry(pad(unpaddedSizeBytes), o);
+      data.put(dataPosition, entry);
+      dataPosition += entry.sizeBytes;
+      dataSize = Math.max(dataSize, dataPosition);
+      if (dataCapacity < dataSize) {
+        // Grow by some arbitrary amount...
+        dataCapacity = dataSize + 32;
       }
-      return pos;
-    }
-
-    private int toIndex(int dataPosition) {
-      int calculatedPos = 0;
-      int i = 0;
-      for (; i < buffer.size() && calculatedPos < dataPosition; i++) {
-        calculatedPos += buffer.get(i).first;
-      }
-      return i;
     }
   }
 

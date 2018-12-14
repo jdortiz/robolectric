@@ -2,6 +2,7 @@ package org.robolectric.shadows;
 
 import static android.os.Build.VERSION_CODES.LOLLIPOP;
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
@@ -18,7 +19,6 @@ import java.util.HashMap;
 import java.util.List;
 import org.junit.After;
 import org.junit.Before;
-import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.annotation.Config;
@@ -46,27 +46,61 @@ public class ShadowParcelTest {
   @Test
   public void testReadIntWhenEmpty() {
     assertThat(parcel.readInt()).isEqualTo(0);
+    assertThat(parcel.dataPosition()).isEqualTo(0);
+    assertInvariants();
+  }
+
+  @Test
+  public void testReadIntWhenUninitialized() {
+    parcel.setDataSize(100);
+    assertThat(parcel.readInt()).isEqualTo(0);
+    assertThat(parcel.dataPosition()).isEqualTo(4);
+    assertInvariants();
   }
 
   @Test
   public void testReadLongWhenEmpty() {
-    assertThat(parcel.readLong()).isEqualTo(0L);
+    assertThat(parcel.readLong()).isEqualTo(0);
+    assertThat(parcel.dataPosition()).isEqualTo(0);
+    assertInvariants();
+  }
+
+  @Test
+  public void testReadLongWhenUninitialized() {
+    parcel.setDataSize(100);
+    assertThat(parcel.readLong()).isEqualTo(0);
+    assertThat(parcel.dataPosition()).isEqualTo(8);
+    assertInvariants();
+  }
+
+  @Test
+  public void testReadLongWhenNotBigEnoughForALong() {
+    parcel.setDataSize(4);
+    assertThat(parcel.readLong()).isEqualTo(0);
+    assertWithMessage("reading a long should increment 4 bytes if the buffer is only 4 bytes long")
+        .that(parcel.dataPosition())
+        .isEqualTo(4);
+    assertInvariants();
   }
 
   @Test
   public void testReadStringWhenEmpty() {
     assertThat(parcel.readString()).isNull();
+    assertInvariants();
   }
 
   @Test
   public void testReadStrongBinderWhenEmpty() {
+    parcel.setDataSize(100);
     assertThat(parcel.readStrongBinder()).isNull();
+    assertThat(parcel.dataPosition()).isEqualTo(4);
   }
 
   @Test
   public void testReadWriteSingleString() {
     String val = "test";
     parcel.writeString(val);
+    assertInvariants();
     parcel.setDataPosition(0);
     assertThat(parcel.readString()).isEqualTo(val);
   }
@@ -74,13 +108,16 @@ public class ShadowParcelTest {
   @Test
   public void testWriteNullString() {
     parcel.writeString(null);
+    assertInvariants();
     parcel.setDataPosition(0);
     assertThat(parcel.readString()).isNull();
+    assertThat(parcel.dataPosition()).isEqualTo(4);
   }
 
   @Test
   public void testWriteEmptyString() {
     parcel.writeString("");
+    assertInvariants();
     parcel.setDataPosition(0);
     assertThat(parcel.readString()).isEmpty();
   }
@@ -89,6 +126,7 @@ public class ShadowParcelTest {
   public void testReadWriteMultipleStrings() {
     for (int i = 0; i < 10; ++i) {
       parcel.writeString(Integer.toString(i));
+      assertInvariants();
     }
     parcel.setDataPosition(0);
     for (int i = 0; i < 10; ++i) {
@@ -138,6 +176,59 @@ public class ShadowParcelTest {
     parcel.writeInt(val);
     parcel.setDataPosition(0);
     assertThat(parcel.readInt()).isEqualTo(val);
+  }
+
+  @Test
+  public void testOverwriteSameSize() {
+    parcel.writeInt(1);
+    parcel.writeInt(2);
+    parcel.writeInt(3);
+    parcel.writeInt(4);
+    assertInvariants();
+
+    parcel.setDataPosition(4);
+    parcel.writeByte((byte) 55); // Byte and int have the parceled size.
+    parcel.writeString(null); // And so does a null string.
+    assertInvariants();
+
+    parcel.setDataPosition(0);
+    assertThat(parcel.readInt()).named("readInt @ 0").isEqualTo(1);
+    assertThat(parcel.dataPosition()).named("position after 0->readInt").isEqualTo(4);
+    assertThat(parcel.readByte()).named("readByte").isEqualTo(55);
+    assertThat(parcel.dataPosition()).named("position after 4->readByte").isEqualTo(8);
+    assertThat(parcel.readString()).named("readString").isNull();
+    assertThat(parcel.dataPosition()).named("position after 8->readString").isEqualTo(12);
+    assertThat(parcel.readInt()).isEqualTo(4);
+  }
+
+  @Test
+  public void testOverwriteInMiddleOfObject() {
+    // NOTE: This is not conformant Parcel behavior, but strict behavior intended to catch bugs in
+    // tests.
+    parcel.writeLong(111L);
+    parcel.writeLong(222L);
+
+    parcel.setDataPosition(4);
+    try {
+      parcel.readInt();
+      fail("should have thrown");
+    } catch (IllegalArgumentException e) {
+      assertThat(e)
+          .hasMessage(
+              "Cannot partially overwrite objects: "
+                  + "4 in middle of \"111\" (java.lang.Long) spanning [0,8)");
+    }
+
+    parcel.setDataPosition(13);
+    try {
+      parcel.writeInt(5);
+      fail("should have thrown");
+    } catch (IllegalArgumentException e) {
+      assertThat(e)
+          .hasMessage(
+              "Cannot partially overwrite objects: "
+                  + "13 in middle of \"222\" (java.lang.Long) spanning [8,16)");
+    }
   }
 
   @Test
@@ -628,16 +719,90 @@ public class ShadowParcelTest {
     assertThat(parcel2.readByte()).isEqualTo((byte) 0xAF);
   }
 
-  @Test @Ignore("Needs implementation in ShadowParcel.ByteBuffer")
+  @Test
   public void testSetDataSize() {
-    parcel.setDataSize(8);
-    assertThat(parcel.dataSize()).isEqualTo(8);
+    parcel.writeInt(1);
+    parcel.writeInt(2);
+    parcel.writeInt(3);
+    parcel.writeInt(4);
+    parcel.writeInt(5);
+    assertThat(parcel.dataSize()).isEqualTo(20);
+    assertInvariants();
+    int oldCapacity = parcel.dataCapacity();
+
+    parcel.setDataSize(12);
+    assertWithMessage("should equal requested size").that(parcel.dataSize()).isEqualTo(12);
+    assertWithMessage("position gets truncated").that(parcel.dataPosition()).isEqualTo(12);
+    assertWithMessage("capacity doesn't shrink").that(parcel.dataCapacity()).isEqualTo(oldCapacity);
+
+    parcel.setDataSize(100);
+    assertWithMessage("should equal requested size").that(parcel.dataSize()).isEqualTo(100);
+    assertWithMessage("position untouched").that(parcel.dataPosition()).isEqualTo(12);
+    assertInvariants();
   }
 
-  @Test @Ignore("Needs implementation in ShadowParcel.ByteBuffer")
-  public void testSetDataCapacity() {
+  @Test
+  public void testDataCapacityGrowing() {
+    parcel.writeInt(-1);
+    assertWithMessage("size is 1 int").that(parcel.dataSize()).isEqualTo(4);
+    assertInvariants();
+    parcel.readInt();
+    assertWithMessage("reading within capacity but over size does not increase size")
+        .that(parcel.dataSize())
+        .isEqualTo(4);
+
+    parcel.setDataCapacity(100);
+    assertInvariants();
+    assertWithMessage("capacity equals requested").that(parcel.dataCapacity()).isEqualTo(100);
+    assertWithMessage("size does not increase with capacity").that(parcel.dataSize()).isEqualTo(4);
+
+    for (int i = 0; i < 100; i++) {
+      parcel.writeInt(i);
+    }
+    assertInvariants();
+    assertWithMessage("101 ints in size").that(parcel.dataSize()).isEqualTo(404);
+    assertWithMessage("advanced 101 ints").that(parcel.dataPosition()).isEqualTo(404);
+  }
+
+  @Test
+  public void testDataCapacityShrinking() {
+    parcel.setDataCapacity(400);
+    assertWithMessage("still empty").that(parcel.dataSize()).isEqualTo(0);
+    assertWithMessage("did not advance").that(parcel.dataPosition()).isEqualTo(0);
+    for (int i = 0; i < 100; i++) {
+      parcel.writeInt(1000 + i);
+    }
+    assertInvariants();
+    assertWithMessage("now has 100 ints").that(parcel.dataSize()).isEqualTo(400);
+    assertWithMessage("advanced 100 ints").that(parcel.dataPosition()).isEqualTo(400);
+    assertWithMessage("capacity equals requested size").that(parcel.dataCapacity()).isEqualTo(400);
+
+    parcel.setDataPosition(88);
+    assertInvariants();
+    parcel.setDataSize(100);
+    assertInvariants();
+    parcel.setDataCapacity(120);
+    assertInvariants();
+    assertWithMessage("requested size honored").that(parcel.dataSize()).isEqualTo(100);
+    assertWithMessage("requested position honored").that(parcel.dataPosition()).isEqualTo(88);
+    assertWithMessage("requested capacity honored").that(parcel.dataCapacity()).isEqualTo(120);
+    assertWithMessage("data preserved (index 22, byte 88)").that(parcel.readInt()).isEqualTo(1022);
+
     parcel.setDataCapacity(8);
-    assertThat(parcel.dataCapacity()).isEqualTo(8);
+    assertInvariants();
+    assertWithMessage("requested capacity honored").that(parcel.dataCapacity()).isEqualTo(8);
+    assertWithMessage("truncated size").that(parcel.dataSize()).isEqualTo(8);
+    assertWithMessage("truncated position").that(parcel.dataPosition()).isEqualTo(8);
+
+    parcel.setDataCapacity(400);
+    assertInvariants();
+    parcel.setDataSize(400);
+    assertInvariants();
+    parcel.setDataPosition(88);
+    assertInvariants();
+    assertWithMessage("data should not re-appear").that(parcel.readInt()).isEqualTo(0);
+    parcel.setDataPosition(4);
+    assertWithMessage("early data should be preserved").that(parcel.readInt()).isEqualTo(1001);
   }
   
   @Test
@@ -658,5 +823,12 @@ public class ShadowParcelTest {
     } catch (SecurityException e) {
       // Expected
     }
+  }
+
+  private void assertInvariants() {
+    assertWithMessage("capacity >= size").that(parcel.dataCapacity()).isAtLeast(parcel.dataSize());
+    assertWithMessage("position <= size").that(parcel.dataPosition()).isAtMost(parcel.dataSize());
+    assertWithMessage("size % 4 == 0").that(parcel.dataSize() % 4).isEqualTo(0);
+    assertWithMessage("capacity % 4 == 0").that(parcel.dataSize() % 4).isEqualTo(0);
   }
 }
