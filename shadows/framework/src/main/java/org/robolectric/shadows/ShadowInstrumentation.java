@@ -132,7 +132,10 @@ public class ShadowInstrumentation {
 
   private void verifyActivityInManifest(Intent intent) {
     if (checkActivities
-        && RuntimeEnvironment.application.getPackageManager().resolveActivity(intent, -1) == null) {
+        && RuntimeEnvironment.application
+                .getPackageManager()
+                .resolveActivity(intent, MATCH_DEFAULT_ONLY)
+            == null) {
       throw new ActivityNotFoundException(intent.getAction());
     }
   }
