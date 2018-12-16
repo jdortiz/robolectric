@@ -4,6 +4,7 @@ import static android.os.Build.VERSION_CODES.JELLY_BEAN;
 import static android.os.Build.VERSION_CODES.LOLLIPOP;
 import static android.os.Build.VERSION_CODES.M;
 import static org.robolectric.shadow.api.Shadow.directlyOn;
+import static org.robolectric.util.ReflectionHelpers.proxyFor;
 
 import android.R;
 import android.app.Activity;
@@ -47,6 +48,8 @@ import org.robolectric.annotation.RealObject;
 import org.robolectric.fakes.RoboMenuItem;
 import org.robolectric.shadow.api.Shadow;
 import org.robolectric.util.ReflectionHelpers;
+import org.robolectric.util.ReflectionHelpers.ForType;
+import org.robolectric.util.ReflectionHelpers.WithType;
 
 @Implements(Activity.class)
 public class ShadowActivity extends ShadowContextThemeWrapper {
@@ -77,6 +80,48 @@ public class ShadowActivity extends ShadowContextThemeWrapper {
     ReflectionHelpers.setField(realActivity, "mApplication", application);
   }
 
+  @ForType(Activity.class)
+  public interface _Activity_ {
+    // <= KITKAT:
+    void attach(
+        Context context,
+        ActivityThread activityThread,
+        Instrumentation instrumentation,
+        IBinder token,
+        int ident,
+        Application application,
+        Intent intent,
+        ActivityInfo activityInfo,
+        CharSequence title,
+        Activity parent,
+        String id,
+        @WithType("android.app.Activity$NonConfigurationInstances")
+            Object lastNonConfigurationInstances,
+        Configuration configuration);
+
+    // <= LOLLIPOP:
+    void attach(
+        Context context,
+        ActivityThread activityThread,
+        Instrumentation instrumentation,
+        IBinder token,
+        int ident,
+        Application application,
+        Intent intent,
+        ActivityInfo activityInfo,
+        CharSequence title,
+        Activity parent,
+        String id,
+        @WithType("android.app.Activity$NonConfigurationInstances")
+            Object lastNonConfigurationInstances,
+        Configuration configuration,
+        IVoiceInteractor iVoiceInteractor);
+
+    default void attach() {
+      System.out.println("true = " + true);
+    }
+  }
+
   public void callAttach(Intent intent) {
     int apiLevel = RuntimeEnvironment.getApiLevel();
     Application application = RuntimeEnvironment.application;
@@ -92,49 +137,18 @@ public class ShadowActivity extends ShadowContextThemeWrapper {
 
     CharSequence activityTitle = activityInfo.loadLabel(baseContext.getPackageManager());
 
-    Instrumentation instrumentation =
-        ((ActivityThread) RuntimeEnvironment.getActivityThread()).getInstrumentation();
+    ActivityThread activityThread = (ActivityThread) RuntimeEnvironment.getActivityThread();
+    Instrumentation instrumentation = (activityThread).getInstrumentation();
+    proxyFor(_Activity_.class, realActivity).attach();
+
     if (apiLevel <= Build.VERSION_CODES.KITKAT) {
-      ReflectionHelpers.callInstanceMethod(
-          Activity.class,
-          realActivity,
-          "attach",
-          ReflectionHelpers.ClassParameter.from(Context.class, baseContext),
-          ReflectionHelpers.ClassParameter.from(
-              ActivityThread.class, RuntimeEnvironment.getActivityThread()),
-          ReflectionHelpers.ClassParameter.from(Instrumentation.class, instrumentation),
-          ReflectionHelpers.ClassParameter.from(IBinder.class, null),
-          ReflectionHelpers.ClassParameter.from(int.class, 0),
-          ReflectionHelpers.ClassParameter.from(Application.class, application),
-          ReflectionHelpers.ClassParameter.from(Intent.class, intent),
-          ReflectionHelpers.ClassParameter.from(ActivityInfo.class, activityInfo),
-          ReflectionHelpers.ClassParameter.from(CharSequence.class, activityTitle),
-          ReflectionHelpers.ClassParameter.from(Activity.class, null),
-          ReflectionHelpers.ClassParameter.from(String.class, "id"),
-          ReflectionHelpers.ClassParameter.from(nonConfigurationInstancesClass, null),
-          ReflectionHelpers.ClassParameter.from(
-              Configuration.class, application.getResources().getConfiguration()));
+      proxyFor(_Activity_.class, realActivity).attach(
+          baseContext, activityThread, instrumentation, null, 0, application, intent, activityInfo,
+          activityTitle, null, "id", null, application.getResources().getConfiguration());
     } else if (apiLevel <= Build.VERSION_CODES.LOLLIPOP) {
-      ReflectionHelpers.callInstanceMethod(
-          Activity.class,
-          realActivity,
-          "attach",
-          ReflectionHelpers.ClassParameter.from(Context.class, baseContext),
-          ReflectionHelpers.ClassParameter.from(
-              ActivityThread.class, RuntimeEnvironment.getActivityThread()),
-          ReflectionHelpers.ClassParameter.from(Instrumentation.class, instrumentation),
-          ReflectionHelpers.ClassParameter.from(IBinder.class, null),
-          ReflectionHelpers.ClassParameter.from(int.class, 0),
-          ReflectionHelpers.ClassParameter.from(Application.class, application),
-          ReflectionHelpers.ClassParameter.from(Intent.class, intent),
-          ReflectionHelpers.ClassParameter.from(ActivityInfo.class, activityInfo),
-          ReflectionHelpers.ClassParameter.from(CharSequence.class, activityTitle),
-          ReflectionHelpers.ClassParameter.from(Activity.class, null),
-          ReflectionHelpers.ClassParameter.from(String.class, "id"),
-          ReflectionHelpers.ClassParameter.from(nonConfigurationInstancesClass, null),
-          ReflectionHelpers.ClassParameter.from(
-              Configuration.class, application.getResources().getConfiguration()),
-          ReflectionHelpers.ClassParameter.from(IVoiceInteractor.class, null)); // ADDED
+      proxyFor(_Activity_.class, realActivity).attach(
+          baseContext, activityThread, instrumentation, null, 0, application, intent, activityInfo,
+          activityTitle, null, "id", application.getResources().getConfiguration(), null);
     } else if (apiLevel <= Build.VERSION_CODES.M) {
       ReflectionHelpers.callInstanceMethod(
           Activity.class,
